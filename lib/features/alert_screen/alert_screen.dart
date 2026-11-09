@@ -6,24 +6,18 @@ import '../../services/voice_service.dart';
 
 class AlertScreen extends StatefulWidget {
   final int alarmId;
-  final String title;
-  final String subtitle;
-  final String category; // 'medicine', 'meeting', 'alarm', 'custom'
-  final String language; // 'ta' or 'en'
-  final VoidCallback? onTaken;
-  final VoidCallback? onSnooze;
-  final VoidCallback? onSkip;
+  final String medicineName;
+  final String scheduleLabel;
+  final String voiceLang;      // 'ta' or 'en'
+  final String voiceFilePath;
 
   const AlertScreen({
     super.key,
     required this.alarmId,
-    required this.title,
-    required this.subtitle,
-    this.category = 'medicine',
-    this.language = 'en',
-    this.onTaken,
-    this.onSnooze,
-    this.onSkip,
+    required this.medicineName,
+    this.scheduleLabel = '',
+    this.voiceLang = 'ta',
+    this.voiceFilePath = '',
   });
 
   @override
@@ -65,10 +59,10 @@ class _AlertScreenState extends State<AlertScreen> with SingleTickerProviderStat
   }
 
   void _playVoiceOnce() {
-    final textToSpeak = widget.subtitle.isNotEmpty
-        ? widget.subtitle
-        : widget.title;
-    _voiceService.speakText(textToSpeak, widget.language);
+    final textToSpeak = widget.scheduleLabel.isNotEmpty
+        ? widget.scheduleLabel
+        : widget.medicineName;
+    _voiceService.speakText(textToSpeak, widget.voiceLang);
   }
 
   @override
@@ -83,7 +77,6 @@ class _AlertScreenState extends State<AlertScreen> with SingleTickerProviderStat
     _voiceRepeatTimer?.cancel();
     await _voiceService.stop();
     await AlarmService.stop(widget.alarmId);
-    widget.onTaken?.call();
     if (mounted) Navigator.of(context).maybePop();
   }
 
@@ -95,10 +88,9 @@ class _AlertScreenState extends State<AlertScreen> with SingleTickerProviderStat
     await AlarmService.scheduleAlarm(
       id: widget.alarmId + 1000,
       fireAt: DateTime.now().add(const Duration(minutes: 10)),
-      title: widget.title,
-      body: widget.subtitle,
+      title: widget.medicineName,
+      body: widget.scheduleLabel,
     );
-    widget.onSnooze?.call();
     if (mounted) Navigator.of(context).maybePop();
   }
 
@@ -106,20 +98,15 @@ class _AlertScreenState extends State<AlertScreen> with SingleTickerProviderStat
     _voiceRepeatTimer?.cancel();
     await _voiceService.stop();
     await AlarmService.stop(widget.alarmId);
-    widget.onSkip?.call();
     if (mounted) Navigator.of(context).maybePop();
   }
 
   @override
   Widget build(BuildContext context) {
-    final isTa = widget.language == 'ta';
+    final isTa = widget.voiceLang == 'ta';
     final timeStr = DateFormat('hh:mm a').format(DateTime.now());
 
-    final categoryLabel = widget.category == 'medicine'
-        ? (isTa ? '💊 மருந்து நினைவூட்டல்' : '💊 Medicine Alert')
-        : widget.category == 'meeting'
-            ? (isTa ? '📅 சந்திப்பு நினைவூட்டல்' : '📅 Meeting Alert')
-            : (isTa ? '🔔 அலர்ட்' : '🔔 Alert');
+    const categoryLabel = '💊 Medicine Alert';
 
     final takenLabel = isTa ? '✓ எடுத்தேன்' : '✓ Taken';
     final snoozeLabel = isTa ? '⏱ 10 நிமிடம் தள்ளிப்போடு' : '⏱ Snooze 10 min';
@@ -146,9 +133,9 @@ class _AlertScreenState extends State<AlertScreen> with SingleTickerProviderStat
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
                       ),
-                      child: Text(
+                      child: const Text(
                         categoryLabel,
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: Colors.white,
                           fontSize: 14,
                           fontWeight: FontWeight.w600,
@@ -207,7 +194,7 @@ class _AlertScreenState extends State<AlertScreen> with SingleTickerProviderStat
 
                 // Dominant Alert Name
                 Text(
-                  widget.title,
+                  widget.medicineName,
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     color: Colors.white,
@@ -220,10 +207,10 @@ class _AlertScreenState extends State<AlertScreen> with SingleTickerProviderStat
 
                 const SizedBox(height: 16),
 
-                // Subtitle / Dose Note
-                if (widget.subtitle.isNotEmpty)
+                // Subtitle / Schedule Label
+                if (widget.scheduleLabel.isNotEmpty)
                   Text(
-                    widget.subtitle,
+                    widget.scheduleLabel,
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.85),
