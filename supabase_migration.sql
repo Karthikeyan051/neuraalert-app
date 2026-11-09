@@ -95,3 +95,4 @@ $$;
 
 revoke all on function public.admin_user_overview() from public, anon;
 grant execute on function public.admin_user_overview() to authenticated;
+
