@@ -1,6 +1,11 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:drift/drift.dart' as drift;
+import 'package:uuid/uuid.dart';
+import '../../data/db/app_database.dart';
+import '../../main.dart';
 import '../../services/alarm_service.dart';
 import '../../services/voice_service.dart';
 
@@ -73,32 +78,68 @@ class _AlertScreenState extends State<AlertScreen> with SingleTickerProviderStat
     super.dispose();
   }
 
+  Future<void> _recordDoseLog(String status) async {
+    try {
+      final scheduledAlarm = await (db.select(db.scheduledAlarms)
+            ..where((t) => t.alarmId.equals(widget.alarmId)))
+          .getSingleOrNull();
+
+      if (scheduledAlarm != null) {
+        final now = DateTime.now();
+        await db.into(db.doseLogs).insert(
+              DoseLogsCompanion(
+                id: drift.Value(const Uuid().v4()),
+                scheduleId: drift.Value(scheduledAlarm.scheduleId),
+                scheduledAt: drift.Value(scheduledAlarm.fireAt),
+                status: drift.Value(status),
+                actedAt: drift.Value(now),
+                updatedAt: drift.Value(now),
+              ),
+            );
+      }
+    } catch (_) {}
+  }
+
+  void _dismissScreen() {
+    if (mounted) {
+      if (context.canPop()) {
+        context.pop();
+      } else {
+        context.go('/today');
+      }
+    }
+  }
+
   Future<void> _handleTaken() async {
     _voiceRepeatTimer?.cancel();
     await _voiceService.stop();
     await AlarmService.stop(widget.alarmId);
-    if (mounted) Navigator.of(context).maybePop();
+    await _recordDoseLog('taken');
+    _dismissScreen();
   }
 
   Future<void> _handleSnooze() async {
     _voiceRepeatTimer?.cancel();
     await _voiceService.stop();
     await AlarmService.stop(widget.alarmId);
-    // Schedule snooze in 10 minutes
+    await _recordDoseLog('snoozed');
+    final snoozeAlarmId = (widget.alarmId + 1000) & 0x7FFFFFFF;
     await AlarmService.scheduleAlarm(
-      id: widget.alarmId + 1000,
+      id: snoozeAlarmId,
       fireAt: DateTime.now().add(const Duration(minutes: 10)),
+      voiceAudioPath: widget.voiceFilePath.isNotEmpty ? widget.voiceFilePath : null,
       title: widget.medicineName,
       body: widget.scheduleLabel,
     );
-    if (mounted) Navigator.of(context).maybePop();
+    _dismissScreen();
   }
 
   Future<void> _handleSkip() async {
     _voiceRepeatTimer?.cancel();
     await _voiceService.stop();
     await AlarmService.stop(widget.alarmId);
-    if (mounted) Navigator.of(context).maybePop();
+    await _recordDoseLog('skipped');
+    _dismissScreen();
   }
 
   @override

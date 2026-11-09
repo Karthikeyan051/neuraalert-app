@@ -10,7 +10,6 @@ class VoiceService {
     if (_isInitialized) return;
     try {
       if (Platform.isAndroid) {
-        // Prefer Google TTS engine which has best Tamil support
         final engines = await _tts.getEngines;
         if (engines is List && engines.contains('com.google.android.tts')) {
           await _tts.setEngine('com.google.android.tts');
@@ -22,9 +21,7 @@ class VoiceService {
       await _tts.setVolume(1.0);
       await _tts.setPitch(1.0);
       _isInitialized = true;
-    } catch (e) {
-      // Fallback
-    }
+    } catch (_) {}
   }
 
   Future<bool> isTamilAvailable() async {
@@ -97,30 +94,23 @@ class VoiceService {
     await _tts.speak(text);
   }
 
-  Future<String?> synthesizeSpokenFile({
-    required String id,
-    required String medicineName,
-    required String doseNote,
-    required String foodRelation,
-    required String lang,
+  /// Synthesizes [text] directly to a WAV file in the app documents directory.
+  Future<String> synthesizeSpokenFile({
+    required String text,
+    required String filename,
+    String lang = 'ta',
   }) async {
     await init();
     try {
       final locale = lang == 'ta' ? 'ta-IN' : 'en-IN';
       await _tts.setLanguage(locale);
-      final phrase = buildSpokenPhrase(
-        medicineName: medicineName,
-        doseNote: doseNote,
-        foodRelation: foodRelation,
-        lang: lang,
-      );
 
       final dir = await getApplicationDocumentsDirectory();
       final voiceDir = Directory('${dir.path}/voice');
       if (!await voiceDir.exists()) {
         await voiceDir.create(recursive: true);
       }
-      final file = File('${voiceDir.path}/voice_${id}_$lang.wav');
+      final file = File('${voiceDir.path}/$filename');
       if (await file.exists()) {
         try {
           await file.delete();
@@ -128,16 +118,15 @@ class VoiceService {
       }
 
       await _tts.awaitSynthCompletion(true);
-      // Pass isFullPath = true so Android writes directly to our app file
-      await _tts.synthesizeToFile(phrase, file.path, true);
+      // isFullPath = true ensures file is written to our directory on Android
+      await _tts.synthesizeToFile(text, file.path, true);
 
-      // Verify file exists
       if (await file.exists() && (await file.length()) > 50) {
         return file.path;
       }
-      return null;
+      return '';
     } catch (_) {
-      return null;
+      return '';
     }
   }
 

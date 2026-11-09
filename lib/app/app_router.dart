@@ -7,6 +7,7 @@ import '../features/auth/auth_screen.dart';
 import '../features/today/today_screen.dart';
 import '../features/alerts/alerts_screen.dart';
 import '../features/alerts/add_alert_screen.dart';
+import '../features/alerts/reminders_repository.dart';
 import '../features/alert_screen/alert_screen.dart';
 import '../features/history/history_screen.dart';
 import '../features/settings/settings_screen.dart';
@@ -48,7 +49,12 @@ final appRouter = GoRouter(
       routes: [
         GoRoute(path: '/today', builder: (ctx, state) => const TodayScreen()),
         GoRoute(path: '/alerts', builder: (ctx, state) => const AlertsScreen()),
-        GoRoute(path: '/add-alert', builder: (ctx, state) => const AddAlertScreen()),
+        GoRoute(
+          path: '/add-alert',
+          builder: (ctx, state) => AddAlertScreen(
+            existing: state.extra as ScheduleWithMedicine?,
+          ),
+        ),
         GoRoute(path: '/history', builder: (ctx, state) => const HistoryScreen()),
         GoRoute(path: '/settings', builder: (ctx, state) => const SettingsScreen()),
       ],
