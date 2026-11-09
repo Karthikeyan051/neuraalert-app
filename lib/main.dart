@@ -150,6 +150,7 @@ class _SpikeHomeScreenState extends State<SpikeHomeScreen> {
       foodRelation: _foodRelation,
       lang: _selectedLang,
     );
+    debugPrint('Synthesized audioPath: $audioPath');
 
     final title = _selectedLang == 'ta' ? 'மருந்து நேரம்: $name' : 'Medicine Alert: $name';
     final body = _voiceService.buildSpokenPhrase(

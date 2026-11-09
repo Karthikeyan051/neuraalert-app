@@ -16,7 +16,9 @@ class VoiceService {
           await _tts.setEngine('com.google.android.tts');
         }
       }
-      await _tts.setSpeechRate(0.5);
+      await _tts.awaitSynthCompletion(true);
+      await _tts.awaitSpeakCompletion(true);
+      await _tts.setSpeechRate(0.48);
       await _tts.setVolume(1.0);
       await _tts.setPitch(1.0);
       _isInitialized = true;
@@ -88,6 +90,13 @@ class VoiceService {
     await _tts.speak(phrase);
   }
 
+  Future<void> speakText(String text, String lang) async {
+    await init();
+    final locale = lang == 'ta' ? 'ta-IN' : 'en-IN';
+    await _tts.setLanguage(locale);
+    await _tts.speak(text);
+  }
+
   Future<String?> synthesizeSpokenFile({
     required String id,
     required String medicineName,
@@ -111,15 +120,20 @@ class VoiceService {
       if (!await voiceDir.exists()) {
         await voiceDir.create(recursive: true);
       }
-      final fileName = 'voice_${id}_$lang.wav';
-      final file = File('${voiceDir.path}/$fileName');
+      final file = File('${voiceDir.path}/voice_${id}_$lang.wav');
+      if (await file.exists()) {
+        try {
+          await file.delete();
+        } catch (_) {}
+      }
 
-      // Android synthesizeToFile writes relative to external storage or app dir
-      final result = await _tts.synthesizeToFile(phrase, fileName);
-      if (result == 1) {
-        if (await file.exists()) {
-          return file.path;
-        }
+      await _tts.awaitSynthCompletion(true);
+      // Pass isFullPath = true so Android writes directly to our app file
+      await _tts.synthesizeToFile(phrase, file.path, true);
+
+      // Verify file exists
+      if (await file.exists() && (await file.length()) > 50) {
+        return file.path;
       }
       return null;
     } catch (_) {

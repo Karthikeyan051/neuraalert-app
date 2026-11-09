@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../services/alarm_service.dart';
+import '../../services/voice_service.dart';
 
 class AlertScreen extends StatefulWidget {
   final int alarmId;
@@ -31,6 +33,8 @@ class AlertScreen extends StatefulWidget {
 class _AlertScreenState extends State<AlertScreen> with SingleTickerProviderStateMixin {
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
+  final VoiceService _voiceService = VoiceService();
+  Timer? _voiceRepeatTimer;
 
   @override
   void initState() {
@@ -43,21 +47,49 @@ class _AlertScreenState extends State<AlertScreen> with SingleTickerProviderStat
     _pulseAnimation = Tween<double>(begin: 0.92, end: 1.08).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
+
+    // Speak voice alert immediately and loop
+    _initAndStartVoice();
+  }
+
+  Future<void> _initAndStartVoice() async {
+    await _voiceService.init();
+    _playVoiceOnce();
+
+    // Repeat spoken alert every 9 seconds while screen is visible
+    _voiceRepeatTimer = Timer.periodic(const Duration(seconds: 9), (_) {
+      if (mounted) {
+        _playVoiceOnce();
+      }
+    });
+  }
+
+  void _playVoiceOnce() {
+    final textToSpeak = widget.subtitle.isNotEmpty
+        ? widget.subtitle
+        : widget.title;
+    _voiceService.speakText(textToSpeak, widget.language);
   }
 
   @override
   void dispose() {
+    _voiceRepeatTimer?.cancel();
+    _voiceService.stop();
     _pulseController.dispose();
     super.dispose();
   }
 
   Future<void> _handleTaken() async {
+    _voiceRepeatTimer?.cancel();
+    await _voiceService.stop();
     await AlarmService.stop(widget.alarmId);
     widget.onTaken?.call();
     if (mounted) Navigator.of(context).maybePop();
   }
 
   Future<void> _handleSnooze() async {
+    _voiceRepeatTimer?.cancel();
+    await _voiceService.stop();
     await AlarmService.stop(widget.alarmId);
     // Schedule snooze in 10 minutes
     await AlarmService.scheduleAlarm(
@@ -71,6 +103,8 @@ class _AlertScreenState extends State<AlertScreen> with SingleTickerProviderStat
   }
 
   Future<void> _handleSkip() async {
+    _voiceRepeatTimer?.cancel();
+    await _voiceService.stop();
     await AlarmService.stop(widget.alarmId);
     widget.onSkip?.call();
     if (mounted) Navigator.of(context).maybePop();
@@ -108,9 +142,9 @@ class _AlertScreenState extends State<AlertScreen> with SingleTickerProviderStat
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                       decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.12),
+                        color: Colors.white.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: Colors.white.withOpacity(0.2)),
+                        border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
                       ),
                       child: Text(
                         categoryLabel,
@@ -124,7 +158,7 @@ class _AlertScreenState extends State<AlertScreen> with SingleTickerProviderStat
                     Text(
                       timeStr,
                       style: TextStyle(
-                        color: Colors.white.withOpacity(0.85),
+                        color: Colors.white.withValues(alpha: 0.85),
                         fontSize: 18,
                         fontWeight: FontWeight.w600,
                         letterSpacing: 0.5,
@@ -146,14 +180,14 @@ class _AlertScreenState extends State<AlertScreen> with SingleTickerProviderStat
                         height: 120,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: const Color(0xFF1565C0).withOpacity(0.25),
+                          color: const Color(0xFF1565C0).withValues(alpha: 0.25),
                           border: Border.all(
-                            color: const Color(0xFF2196F3).withOpacity(0.6),
+                            color: const Color(0xFF2196F3).withValues(alpha: 0.6),
                             width: 2.5,
                           ),
                           boxShadow: [
                             BoxShadow(
-                              color: const Color(0xFF2196F3).withOpacity(0.3),
+                              color: const Color(0xFF2196F3).withValues(alpha: 0.3),
                               blurRadius: 30,
                               spreadRadius: 5,
                             ),
@@ -177,7 +211,7 @@ class _AlertScreenState extends State<AlertScreen> with SingleTickerProviderStat
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     color: Colors.white,
-                    fontSize: 40,
+                    fontSize: 38,
                     fontWeight: FontWeight.bold,
                     letterSpacing: -0.5,
                     height: 1.2,
@@ -192,7 +226,7 @@ class _AlertScreenState extends State<AlertScreen> with SingleTickerProviderStat
                     widget.subtitle,
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      color: Colors.white.withOpacity(0.85),
+                      color: Colors.white.withValues(alpha: 0.85),
                       fontSize: 19,
                       fontWeight: FontWeight.w500,
                       height: 1.4,
@@ -236,7 +270,7 @@ class _AlertScreenState extends State<AlertScreen> with SingleTickerProviderStat
                     onPressed: _handleSnooze,
                     style: OutlinedButton.styleFrom(
                       foregroundColor: Colors.white,
-                      side: BorderSide(color: Colors.white.withOpacity(0.4), width: 1.5),
+                      side: BorderSide(color: Colors.white.withValues(alpha: 0.4), width: 1.5),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16),
                       ),
@@ -260,7 +294,7 @@ class _AlertScreenState extends State<AlertScreen> with SingleTickerProviderStat
                   child: TextButton(
                     onPressed: _handleSkip,
                     style: TextButton.styleFrom(
-                      foregroundColor: Colors.white.withOpacity(0.65),
+                      foregroundColor: Colors.white.withValues(alpha: 0.65),
                     ),
                     child: Text(
                       skipLabel,
