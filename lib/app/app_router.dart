@@ -15,49 +15,67 @@ import 'shell_scaffold.dart';
 
 final navigatorKey = GlobalKey<NavigatorState>();
 
-final appRouter = GoRouter(
-  navigatorKey: navigatorKey,
-  initialLocation: '/today',
-  routes: [
-    GoRoute(
-      path: '/language',
-      builder: (ctx, state) => const LanguagePickScreen(),
-    ),
-    GoRoute(
-      path: '/onboarding',
-      builder: (ctx, state) => const OnboardingScreen(),
-    ),
-    GoRoute(
-      path: '/auth',
-      builder: (ctx, state) => const AuthScreen(),
-    ),
-    GoRoute(
-      path: '/alert-screen',
-      builder: (ctx, state) {
-        final extra = state.extra as Map<String, dynamic>? ?? {};
-        return AlertScreen(
-          alarmId: extra['alarmId'] as int? ?? 0,
-          medicineName: extra['medicineName'] as String? ?? 'Alert',
-          scheduleLabel: extra['scheduleLabel'] as String? ?? '',
-          voiceLang: extra['voiceLang'] as String? ?? 'ta',
-          voiceFilePath: extra['voiceFilePath'] as String? ?? '',
-        );
-      },
-    ),
-    ShellRoute(
-      builder: (ctx, state, child) => ShellScaffold(child: child),
-      routes: [
-        GoRoute(path: '/today', builder: (ctx, state) => const TodayScreen()),
-        GoRoute(path: '/alerts', builder: (ctx, state) => const AlertsScreen()),
-        GoRoute(
-          path: '/add-alert',
-          builder: (ctx, state) => AddAlertScreen(
-            existing: state.extra as ScheduleWithMedicine?,
-          ),
+GoRouter createAppRouter({required String initialLocation}) {
+  return GoRouter(
+    navigatorKey: navigatorKey,
+    initialLocation: initialLocation,
+    routes: [
+      GoRoute(
+        path: '/language',
+        builder: (ctx, state) {
+          final fromSettings = state.uri.queryParameters['from'] == 'settings';
+          return LanguagePickScreen(fromSettings: fromSettings);
+        },
+      ),
+      GoRoute(
+        path: '/onboarding',
+        builder: (ctx, state) {
+          final fromSettings = state.uri.queryParameters['from'] == 'settings';
+          return OnboardingScreen(fromSettings: fromSettings);
+        },
+      ),
+      GoRoute(
+        path: '/auth',
+        builder: (ctx, state) => const AuthScreen(),
+      ),
+      GoRoute(
+        path: '/alert-screen',
+        builder: (ctx, state) {
+          final extra = state.extra as Map<String, dynamic>? ?? {};
+          return AlertScreen(
+            alarmId: extra['alarmId'] as int? ?? 0,
+            medicineName: extra['medicineName'] as String? ?? 'Alert',
+            alertType: extra['alertType'] as String? ?? 'medicine',
+            doseNote: extra['doseNote'] as String? ?? '',
+            foodRelation: extra['foodRelation'] as String? ?? 'none',
+            spokenPhrase: extra['spokenPhrase'] as String? ?? '',
+            voiceLang: extra['voiceLang'] as String? ?? 'ta',
+            voiceFilePath: extra['voiceFilePath'] as String? ?? '',
+            isTestAlert: extra['isTestAlert'] as bool? ?? false,
+          );
+        },
+      ),
+      ShellRoute(
+        builder: (ctx, state, child) => ShellScaffold(child: child),
+        routes: [
+          GoRoute(
+              path: '/today', builder: (ctx, state) => const TodayScreen()),
+          GoRoute(
+              path: '/alerts', builder: (ctx, state) => const AlertsScreen()),
+          GoRoute(
+              path: '/history',
+              builder: (ctx, state) => const HistoryScreen()),
+          GoRoute(
+              path: '/settings',
+              builder: (ctx, state) => const SettingsScreen()),
+        ],
+      ),
+      GoRoute(
+        path: '/add-alert',
+        builder: (ctx, state) => AddAlertScreen(
+          existing: state.extra as ScheduleWithMedicine?,
         ),
-        GoRoute(path: '/history', builder: (ctx, state) => const HistoryScreen()),
-        GoRoute(path: '/settings', builder: (ctx, state) => const SettingsScreen()),
-      ],
-    ),
-  ],
-);
+      ),
+    ],
+  );
+}

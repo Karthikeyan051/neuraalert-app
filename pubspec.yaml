@@ -49,3 +49,10 @@ flutter:
   assets:
     - assets/quotes/
     - assets/sounds/
+  fonts:
+    - family: NotoSans
+      fonts:
+        - asset: assets/fonts/NotoSans.ttf
+    - family: NotoSansTamil
+      fonts:
+        - asset: assets/fonts/NotoSansTamil.ttf

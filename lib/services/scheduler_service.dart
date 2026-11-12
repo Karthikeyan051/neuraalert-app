@@ -134,6 +134,7 @@ class SchedulerService {
     return await _voiceService.synthesizeSpokenFile(
       text: phrase,
       filename: 'voice_${scheduleId}_$voiceLang.wav',
+      lang: voiceLang,
     );
   }
 

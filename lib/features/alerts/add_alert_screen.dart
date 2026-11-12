@@ -1,13 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:neuraalert/app/app_theme.dart';
 import 'package:neuraalert/features/alerts/reminders_repository.dart';
+import 'package:neuraalert/features/settings/app_settings_provider.dart';
 import 'package:neuraalert/services/scheduler_service.dart';
 import 'package:neuraalert/services/voice_service.dart';
 
 class AddAlertScreen extends ConsumerStatefulWidget {
   final ScheduleWithMedicine? existing;
-
   const AddAlertScreen({super.key, this.existing});
 
   @override
@@ -15,32 +17,60 @@ class AddAlertScreen extends ConsumerStatefulWidget {
 }
 
 class _AddAlertScreenState extends ConsumerState<AddAlertScreen> {
-  final _formKey = GlobalKey<FormState>();
   final _labelController = TextEditingController();
   final _doseNoteController = TextEditingController();
+  final PageController _pageController = PageController();
+  int _currentStep = 0;
 
-  String _alertType = 'medicine'; // medicine, meeting, alarm, custom
-  String _foodRelation = 'none'; // none, before, after, with
-  String _voiceLang = 'ta'; // ta, en
-  int _timeMinutes = 8 * 60; // Default 08:00 AM
-  int _daysMask = 127; // Every day
+  String _alertType = 'medicine';
+  String _foodRelation = 'none';
+  late String _voiceLang;
+  int _timeHour = 8; // 1..12
+  int _timeMinute = 0; // 0..59
+  bool _isAm = true;
+  int _daysMask = 127;
 
   bool _isSaving = false;
   bool _isPlayingPreview = false;
   final VoiceService _voiceService = VoiceService();
 
-  final List<String> _dayNames = ['திங்கள்', 'செவ்வாய்', 'புதன்', 'வியாழன்', 'வெள்ளி', 'சனி', 'ஞாயிறு'];
-  final List<String> _dayNamesEn = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  late final FixedExtentScrollController _hourCtrl;
+  late final FixedExtentScrollController _minuteCtrl;
+  late final FixedExtentScrollController _amPmCtrl;
+
+  static const _dayNamesTa = [
+    'திங்',
+    'செவ்',
+    'புத',
+    'வியா',
+    'வெள்',
+    'சனி',
+    'ஞாயி',
+  ];
+  static const _dayNamesEn = [
+    'Mon',
+    'Tue',
+    'Wed',
+    'Thu',
+    'Fri',
+    'Sat',
+    'Sun',
+  ];
 
   @override
   void initState() {
     super.initState();
+    _voiceLang = ref.read(appSettingsProvider).language;
     if (widget.existing != null) {
       final s = widget.existing!.schedule;
       final m = widget.existing!.medicine;
       _labelController.text = s.label;
       _alertType = s.alertType;
-      _timeMinutes = s.timeMinutes;
+      final totalMins = s.timeMinutes;
+      final hour24 = totalMins ~/ 60;
+      _timeMinute = totalMins % 60;
+      _isAm = hour24 < 12;
+      _timeHour = hour24 == 0 ? 12 : (hour24 > 12 ? hour24 - 12 : hour24);
       _daysMask = s.daysMask;
       _voiceLang = s.voiceLang;
       if (m != null) {
@@ -48,62 +78,81 @@ class _AddAlertScreenState extends ConsumerState<AddAlertScreen> {
         _foodRelation = m.foodRelation;
       }
     }
+    _hourCtrl = FixedExtentScrollController(initialItem: _timeHour - 1);
+    _minuteCtrl = FixedExtentScrollController(initialItem: _timeMinute);
+    _amPmCtrl = FixedExtentScrollController(initialItem: _isAm ? 0 : 1);
   }
 
   @override
   void dispose() {
     _labelController.dispose();
     _doseNoteController.dispose();
+    _pageController.dispose();
+    _hourCtrl.dispose();
+    _minuteCtrl.dispose();
+    _amPmCtrl.dispose();
     super.dispose();
   }
 
-  String _formatTime(int minutes) {
-    final hour = minutes ~/ 60;
-    final min = minutes % 60;
-    final period = hour >= 12 ? 'PM' : 'AM';
-    final displayHour = hour == 0 ? 12 : (hour > 12 ? hour - 12 : hour);
-    final minStr = min.toString().padLeft(2, '0');
-    final tamilPeriod = hour >= 12 ? (hour >= 18 ? 'இரவு' : 'மதியம்') : 'காலை';
-    return _voiceLang == 'ta'
-        ? '$tamilPeriod $displayHour:$minStr $period'
-        : '$displayHour:$minStr $period';
+  int get _timeMinutes {
+    int hour24 = _timeHour % 12;
+    if (!_isAm) hour24 += 12;
+    return hour24 * 60 + _timeMinute;
   }
 
-  Future<void> _pickTime() async {
-    final currentHour = _timeMinutes ~/ 60;
-    final currentMinute = _timeMinutes % 60;
-    final time = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay(hour: currentHour, minute: currentMinute),
-      builder: (context, child) {
-        return MediaQuery(
-          data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
-          child: child!,
-        );
-      },
+  String get _formattedTime {
+    final minStr = _timeMinute.toString().padLeft(2, '0');
+    final period = _isAm ? 'AM' : 'PM';
+    return '$_timeHour:$minStr $period';
+  }
+
+  String _tamilPeriodHelper() {
+    final total = _timeMinutes;
+    final h = total ~/ 60;
+    if (h < 12) return 'காலை (Morning)';
+    if (h < 16) return 'மதியம் (Afternoon)';
+    if (h < 19) return 'மாலை (Evening)';
+    return 'இரவு (Night)';
+  }
+
+  void _goToPage(int page) {
+    FocusScope.of(context).unfocus();
+    HapticFeedback.selectionClick();
+    _pageController.animateToPage(
+      page,
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeOutCubic,
     );
-
-    if (time != null) {
-      setState(() {
-        _timeMinutes = time.hour * 60 + time.minute;
-      });
-    }
+    setState(() => _currentStep = page);
   }
 
-  Future<void> _playVoicePreview() async {
+  bool _validateStep1(bool uiIsTa) {
     if (_labelController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(_voiceLang == 'ta'
+          content: Text(
+              uiIsTa ? 'பெயரை உள்ளிடவும்' : 'Please enter a name'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return false;
+    }
+    return true;
+  }
+
+  Future<void> _playVoicePreview(bool uiIsTa) async {
+    if (_labelController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(uiIsTa
               ? 'முதலில் பெயரை உள்ளிடவும்'
               : 'Please enter a name first'),
+          behavior: SnackBarBehavior.floating,
         ),
       );
       return;
     }
-
     setState(() => _isPlayingPreview = true);
-
     final phrase = SchedulerService.buildSpokenPhrase(
       alertType: _alertType,
       label: _labelController.text.trim(),
@@ -111,20 +160,29 @@ class _AddAlertScreenState extends ConsumerState<AddAlertScreen> {
       doseNote: _doseNoteController.text.trim(),
       foodRelation: _foodRelation,
     );
-
     await _voiceService.speakText(phrase, _voiceLang);
-
-    if (mounted) {
-      setState(() => _isPlayingPreview = false);
-    }
+    if (mounted) setState(() => _isPlayingPreview = false);
   }
 
-  Future<void> _save() async {
-    if (!_formKey.currentState!.validate()) return;
+  Future<void> _save(bool uiIsTa) async {
+    if (!_validateStep1(uiIsTa)) {
+      _goToPage(0);
+      return;
+    }
+    if (_daysMask == 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(uiIsTa
+              ? 'குறைந்தது ஒரு நாளையாவது தேர்ந்தெடுக்கவும்'
+              : 'Please select at least one day'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
 
     setState(() => _isSaving = true);
     final repo = ref.read(remindersRepositoryProvider);
-
     try {
       if (widget.existing == null) {
         await repo.createSchedule(
@@ -148,356 +206,1050 @@ class _AddAlertScreenState extends ConsumerState<AddAlertScreen> {
           voiceLang: _voiceLang,
         );
       }
-
-      if (mounted) {
-        context.pop();
-      }
+      if (mounted) context.pop();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error saving reminder: $e')),
+          SnackBar(
+            content: Text('Error: $e'),
+            behavior: SnackBarBehavior.floating,
+          ),
         );
       }
     } finally {
-      if (mounted) {
-        setState(() => _isSaving = false);
-      }
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  Future<void> _deleteExisting(bool uiIsTa) async {
+    final existing = widget.existing;
+    if (existing == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(uiIsTa ? 'நினைவூட்டலை நீக்கவா?' : 'Delete Reminder?'),
+        content: Text(uiIsTa
+            ? 'இதற்கான அனைத்து எதிர்கால அலாரங்களும் ரத்து செய்யப்படும்.'
+            : 'This will cancel all future alarms for this reminder.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(uiIsTa ? 'ரத்து' : 'Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: AppTheme.error),
+            child: Text(uiIsTa ? 'நீக்கு' : 'Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await ref
+          .read(remindersRepositoryProvider)
+          .deleteSchedule(existing.schedule.id);
+      if (mounted) context.pop();
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isTamil = _voiceLang == 'ta';
+    final uiIsTa = ref.watch(appSettingsProvider).isTamil;
+    final isEdit = widget.existing != null;
+    final stepTitles = uiIsTa
+        ? ['பெயர் & வகை', 'நேரம் தேர்வு', 'நாட்கள் & குரல்']
+        : ['Name & Type', 'Set Time', 'Days & Voice'];
 
     return Scaffold(
+      backgroundColor: AppTheme.bg(context),
       appBar: AppBar(
-        title: Text(widget.existing == null
-            ? (isTamil ? 'புதிய நினைவூட்டல்' : 'New Alert')
-            : (isTamil ? 'நினைவூட்டலை மாற்று' : 'Edit Alert')),
+        leading: IconButton(
+          icon: const Icon(Icons.close_rounded),
+          tooltip: uiIsTa ? 'மூடு' : 'Close',
+          onPressed: () => context.pop(),
+        ),
+        title: Text(
+          isEdit
+              ? (uiIsTa ? 'நினைவூட்டல் மாற்று' : 'Edit Reminder')
+              : (uiIsTa ? 'புதிய நினைவூட்டல்' : 'New Reminder'),
+        ),
+        actions: [
+          if (isEdit)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: TextButton.icon(
+                onPressed: _isSaving ? null : () => _deleteExisting(uiIsTa),
+                icon: const Icon(Icons.delete_outline_rounded,
+                    color: AppTheme.error, size: 20),
+                label: Text(
+                  uiIsTa ? 'நீக்கு' : 'Delete',
+                  style: const TextStyle(color: AppTheme.error),
+                ),
+              ),
+            ),
+        ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(54),
+          child: _StepIndicator(
+            currentStep: _currentStep,
+            stepLabel: uiIsTa
+                ? 'படி ${_currentStep + 1} / 3 · ${stepTitles[_currentStep]}'
+                : 'Step ${_currentStep + 1} of 3 · ${stepTitles[_currentStep]}',
+          ),
+        ),
       ),
       body: SafeArea(
-        child: Form(
-          key: _formKey,
-          child: ListView(
-            padding: const EdgeInsets.all(20),
-            children: [
-              // ── Type Selector ──────────────────────────────────────
-              Text(
-                isTamil ? 'வகை / Alert Type' : 'Alert Type',
-                style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 10),
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [
-                    _buildTypeChip('medicine', 'மருந்து', 'Medicine', Icons.medication),
-                    const SizedBox(width: 8),
-                    _buildTypeChip('meeting', 'சந்திப்பு', 'Meeting', Icons.event),
-                    const SizedBox(width: 8),
-                    _buildTypeChip('alarm', 'அலாரம்', 'Alarm', Icons.alarm),
-                    const SizedBox(width: 8),
-                    _buildTypeChip('custom', 'விருப்பம்', 'Custom', Icons.notifications_active),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 24),
-
-              // ── Name Field ─────────────────────────────────────────
-              Text(
-                _alertType == 'medicine'
-                    ? (isTamil ? 'மருந்தின் பெயர் *' : 'Medicine Name *')
-                    : (isTamil ? 'தலைப்பு / பெயர் *' : 'Title / Name *'),
-                style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              TextFormField(
-                controller: _labelController,
-                decoration: InputDecoration(
-                  hintText: _alertType == 'medicine'
-                      ? (isTamil ? 'எ.கா: Paracetamol 500mg' : 'e.g. Paracetamol 500mg')
-                      : (isTamil ? 'எ.கா: மருத்துவ சந்திப்பு' : 'e.g. Doctor appointment'),
-                  prefixIcon: const Icon(Icons.edit_note),
-                ),
-                style: const TextStyle(fontSize: 18),
-                validator: (val) {
-                  if (val == null || val.trim().isEmpty) {
-                    return isTamil ? 'பெயரை உள்ளிடவும்' : 'Please enter a name';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 20),
-
-              // ── Medicine-Specific Fields ────────────────────────────
-              if (_alertType == 'medicine') ...[
-                Text(
-                  isTamil ? 'அளவு குறிப்பு (விருப்பம்)' : 'Dose Note (Optional)',
-                  style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 8),
-                TextFormField(
-                  controller: _doseNoteController,
-                  decoration: InputDecoration(
-                    hintText: isTamil ? 'எ.கா: 1 மாத்திரை / 10ml' : 'e.g. 1 tablet / 10ml',
-                    prefixIcon: const Icon(Icons.numbers),
-                  ),
-                ),
-                const SizedBox(height: 20),
-
-                Text(
-                  isTamil ? 'உணவு தொடர்பு' : 'Food Relation',
-                  style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    _buildFoodChip('none', isTamil ? 'குறிப்பில்லை' : 'None'),
-                    _buildFoodChip('before', isTamil ? 'உணவுக்கு முன்' : 'Before food'),
-                    _buildFoodChip('after', isTamil ? 'உணவுக்குப் பின்' : 'After food'),
-                    _buildFoodChip('with', isTamil ? 'உணவுடன்' : 'With food'),
-                  ],
-                ),
-                const SizedBox(height: 24),
-              ],
-
-              // ── Time Section ───────────────────────────────────────
-              Text(
-                isTamil ? 'நேரம் / Time' : 'Time',
-                style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              InkWell(
-                onTap: _pickTime,
-                borderRadius: BorderRadius.circular(16),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.primary.withAlpha(20),
-                    border: Border.all(color: theme.colorScheme.primary, width: 1.5),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.access_time_filled, color: theme.colorScheme.primary, size: 28),
-                          const SizedBox(width: 14),
-                          Text(
-                            _formatTime(_timeMinutes),
-                            style: TextStyle(
-                              fontSize: 22,
-                              fontWeight: FontWeight.bold,
-                              color: theme.colorScheme.primary,
-                            ),
-                          ),
-                        ],
-                      ),
-                      Text(
-                        isTamil ? 'மாற்று' : 'Change',
-                        style: TextStyle(
-                          color: theme.colorScheme.primary,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 16,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-
-              // Presets
-              Row(
-                children: [
-                  _buildPresetButton(8 * 60, isTamil ? 'காலை 8:00' : 'Morning 8:00'),
-                  const SizedBox(width: 8),
-                  _buildPresetButton(13 * 60, isTamil ? 'மதியம் 1:00' : 'Noon 1:00'),
-                  const SizedBox(width: 8),
-                  _buildPresetButton(20 * 60, isTamil ? 'இரவு 8:00' : 'Night 8:00'),
-                ],
-              ),
-              const SizedBox(height: 24),
-
-              // ── Days of Week ───────────────────────────────────────
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    isTamil ? 'நினைவூட்டும் நாட்கள்' : 'Repeat Days',
-                    style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
-                  ),
-                  TextButton(
-                    onPressed: () {
-                      setState(() {
-                        _daysMask = _daysMask == 127 ? 0 : 127;
-                      });
-                    },
-                    child: Text(_daysMask == 127
-                        ? (isTamil ? 'அனைத்தும் நீக்கு' : 'Clear all')
-                        : (isTamil ? 'தினமும்' : 'Every day')),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: List.generate(7, (index) {
-                  final bit = 1 << index;
-                  final isSelected = (_daysMask & bit) != 0;
-                  final dayLabel = isTamil ? _dayNames[index].substring(0, 1) : _dayNamesEn[index].substring(0, 1);
-                  return GestureDetector(
-                    onTap: () {
-                      setState(() {
-                        if (isSelected) {
-                          _daysMask &= ~bit;
-                        } else {
-                          _daysMask |= bit;
-                        }
-                      });
-                    },
-                    child: Container(
-                      width: 44,
-                      height: 44,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: isSelected ? theme.colorScheme.primary : theme.cardColor,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: isSelected ? theme.colorScheme.primary : Colors.grey.withAlpha(60),
-                        ),
-                      ),
-                      child: Text(
-                        dayLabel,
-                        style: TextStyle(
-                          color: isSelected ? Colors.white : theme.textTheme.bodyMedium?.color,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                        ),
-                      ),
-                    ),
-                  );
-                }),
-              ),
-              const SizedBox(height: 24),
-
-              // ── Voice Language ─────────────────────────────────────
-              Text(
-                isTamil ? 'குரல் மொழி / Voice Language' : 'Voice Language',
-                style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  Expanded(
-                    child: ChoiceChip(
-                      label: const Center(child: Text('தமிழ் (Tamil)', style: TextStyle(fontSize: 16))),
-                      selected: _voiceLang == 'ta',
-                      onSelected: (val) {
-                        if (val) setState(() => _voiceLang = 'ta');
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ChoiceChip(
-                      label: const Center(child: Text('English', style: TextStyle(fontSize: 16))),
-                      selected: _voiceLang == 'en',
-                      onSelected: (val) {
-                        if (val) setState(() => _voiceLang = 'en');
-                      },
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 24),
-
-              // ── Voice Preview Button ───────────────────────────────
-              OutlinedButton.icon(
-                onPressed: _isPlayingPreview ? null : _playVoicePreview,
-                icon: _isPlayingPreview
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.volume_up_rounded),
-                label: Text(
-                  _isPlayingPreview
-                      ? (isTamil ? 'ஒலிக்கிறது...' : 'Playing...')
-                      : (isTamil ? 'குரல் மாதிரி கேட்க (Preview)' : 'Preview Voice'),
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                ),
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size.fromHeight(50),
-                ),
-              ),
-              const SizedBox(height: 32),
-
-              // ── Save Button ────────────────────────────────────────
-              FilledButton(
-                onPressed: _isSaving ? null : _save,
-                child: _isSaving
-                    ? const CircularProgressIndicator(color: Colors.white)
-                    : Text(
-                        isTamil ? 'சேமி (Save)' : 'Save Alert',
-                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                      ),
-              ),
-            ],
-          ),
+        top: false,
+        child: PageView(
+          controller: _pageController,
+          physics: const NeverScrollableScrollPhysics(),
+          onPageChanged: (i) => setState(() => _currentStep = i),
+          children: [
+            _StepOne(
+              labelController: _labelController,
+              doseNoteController: _doseNoteController,
+              alertType: _alertType,
+              foodRelation: _foodRelation,
+              isTamil: uiIsTa,
+              onTypeChanged: (t) => setState(() => _alertType = t),
+              onFoodChanged: (f) => setState(() => _foodRelation = f),
+              onNext: () {
+                if (_validateStep1(uiIsTa)) _goToPage(1);
+              },
+            ),
+            _StepTwo(
+              hourCtrl: _hourCtrl,
+              minuteCtrl: _minuteCtrl,
+              amPmCtrl: _amPmCtrl,
+              timeHour: _timeHour,
+              timeMinute: _timeMinute,
+              isAm: _isAm,
+              formattedTime: _formattedTime,
+              periodHelper: _tamilPeriodHelper(),
+              isTamil: uiIsTa,
+              onHourChanged: (h) => setState(() => _timeHour = h + 1),
+              onMinuteChanged: (m) => setState(() => _timeMinute = m),
+              onAmPmChanged: (i) => setState(() => _isAm = i == 0),
+              onPreset: (h, m, am) {
+                setState(() {
+                  _timeHour = h;
+                  _timeMinute = m;
+                  _isAm = am;
+                });
+                _hourCtrl.animateToItem(h - 1,
+                    duration: const Duration(milliseconds: 250),
+                    curve: Curves.easeOut);
+                _minuteCtrl.animateToItem(m,
+                    duration: const Duration(milliseconds: 250),
+                    curve: Curves.easeOut);
+                _amPmCtrl.animateToItem(am ? 0 : 1,
+                    duration: const Duration(milliseconds: 250),
+                    curve: Curves.easeOut);
+              },
+              onBack: () => _goToPage(0),
+              onNext: () => _goToPage(2),
+            ),
+            _StepThree(
+              daysMask: _daysMask,
+              voiceLang: _voiceLang,
+              uiIsTa: uiIsTa,
+              dayNamesTa: _dayNamesTa,
+              dayNamesEn: _dayNamesEn,
+              isPlayingPreview: _isPlayingPreview,
+              isSaving: _isSaving,
+              onDayToggle: (bit) =>
+                  setState(() => _daysMask = _daysMask ^ bit),
+              onEveryDay: () => setState(() => _daysMask = 127),
+              onClearDays: () => setState(() => _daysMask = 0),
+              onLangChanged: (lang) => setState(() => _voiceLang = lang),
+              onPreview: () => _playVoicePreview(uiIsTa),
+              onBack: () => _goToPage(1),
+              onSave: () => _save(uiIsTa),
+            ),
+          ],
         ),
       ),
     );
   }
+}
 
-  Widget _buildTypeChip(String type, String labelTa, String labelEn, IconData icon) {
-    final isSelected = _alertType == type;
-    final theme = Theme.of(context);
-    final isTamil = _voiceLang == 'ta';
+// ── Step Indicator ───────────────────────────────────────────────────────────
 
-    return FilterChip(
-      selected: isSelected,
-      avatar: Icon(icon, size: 18, color: isSelected ? Colors.white : theme.colorScheme.primary),
-      label: Text(isTamil ? labelTa : labelEn),
-      onSelected: (val) {
-        if (val) setState(() => _alertType = type);
-      },
+class _StepIndicator extends StatelessWidget {
+  final int currentStep;
+  final String stepLabel;
+
+  const _StepIndicator({
+    required this.currentStep,
+    required this.stepLabel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = AppTheme.primaryOf(context);
+    final divider = AppTheme.divider(context);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 4, 24, 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            stepLabel,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: AppTheme.textSub(context),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: List.generate(3, (i) {
+              final isActive = i <= currentStep;
+              return Expanded(
+                child: Padding(
+                  padding: EdgeInsets.only(right: i < 2 ? 8 : 0),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 250),
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: isActive ? primary : divider,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+              );
+            }),
+          ),
+        ],
+      ),
     );
   }
+}
 
-  Widget _buildFoodChip(String relation, String label) {
-    final isSelected = _foodRelation == relation;
-    return ChoiceChip(
-      selected: isSelected,
-      label: Text(label),
-      onSelected: (val) {
-        if (val) setState(() => _foodRelation = relation);
-      },
+// ── Step 1: Name & Type ──────────────────────────────────────────────────────
+
+class _StepOne extends StatelessWidget {
+  final TextEditingController labelController;
+  final TextEditingController doseNoteController;
+  final String alertType;
+  final String foodRelation;
+  final bool isTamil;
+  final ValueChanged<String> onTypeChanged;
+  final ValueChanged<String> onFoodChanged;
+  final VoidCallback onNext;
+
+  const _StepOne({
+    required this.labelController,
+    required this.doseNoteController,
+    required this.alertType,
+    required this.foodRelation,
+    required this.isTamil,
+    required this.onTypeChanged,
+    required this.onFoodChanged,
+    required this.onNext,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(24, 24, 24, 48),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _SectionLabel(
+              isTamil ? 'வகை தேர்வு' : 'What kind of reminder?'),
+          const SizedBox(height: 12),
+          _TypeGrid(
+            selectedType: alertType,
+            isTamil: isTamil,
+            onChanged: onTypeChanged,
+          ),
+          const SizedBox(height: 28),
+          _SectionLabel(
+            alertType == 'medicine'
+                ? (isTamil ? 'மருந்தின் பெயர் *' : 'Medicine Name *')
+                : (isTamil ? 'தலைப்பு *' : 'Reminder Title *'),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: labelController,
+            textInputAction: TextInputAction.next,
+            style: TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.w600,
+              color: AppTheme.text(context),
+            ),
+            decoration: InputDecoration(
+              hintText: alertType == 'medicine'
+                  ? (isTamil ? 'எ.கா: Paracetamol 500mg' : 'e.g. Paracetamol 500mg')
+                  : (isTamil ? 'எ.கா: மருத்துவ சந்திப்பு' : 'e.g. Doctor appointment'),
+              prefixIcon: const Icon(Icons.edit_rounded),
+            ),
+          ),
+          if (alertType == 'medicine') ...[
+            const SizedBox(height: 28),
+            _SectionLabel(
+                isTamil ? 'அளவு குறிப்பு (விருப்பம்)' : 'Dose Note (Optional)'),
+            const SizedBox(height: 10),
+            TextField(
+              controller: doseNoteController,
+              style: TextStyle(
+                fontSize: 18,
+                color: AppTheme.text(context),
+              ),
+              decoration: InputDecoration(
+                hintText:
+                    isTamil ? 'எ.கா: 1 மாத்திரை / 10ml' : 'e.g. 1 tablet / 10ml',
+                prefixIcon: const Icon(Icons.medication_liquid_rounded),
+              ),
+            ),
+            const SizedBox(height: 28),
+            _SectionLabel(isTamil ? 'உணவு தொடர்பு' : 'Food Timing'),
+            const SizedBox(height: 12),
+            _FoodChips(
+              selected: foodRelation,
+              isTamil: isTamil,
+              onChanged: onFoodChanged,
+            ),
+          ],
+          const SizedBox(height: 40),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: onNext,
+              icon: const Icon(Icons.arrow_forward_rounded),
+              label: Text(isTamil ? 'நேரம் தேர்வு செய்க' : 'Continue to Time'),
+            ),
+          ),
+        ],
+      ),
     );
   }
+}
 
-  Widget _buildPresetButton(int minutes, String label) {
-    final isSelected = _timeMinutes == minutes;
+// ── Step 2: Time ─────────────────────────────────────────────────────────────
+
+class _StepTwo extends StatelessWidget {
+  final FixedExtentScrollController hourCtrl;
+  final FixedExtentScrollController minuteCtrl;
+  final FixedExtentScrollController amPmCtrl;
+  final int timeHour;
+  final int timeMinute;
+  final bool isAm;
+  final String formattedTime;
+  final String periodHelper;
+  final bool isTamil;
+  final ValueChanged<int> onHourChanged;
+  final ValueChanged<int> onMinuteChanged;
+  final ValueChanged<int> onAmPmChanged;
+  final Function(int h, int m, bool am) onPreset;
+  final VoidCallback onBack;
+  final VoidCallback onNext;
+
+  const _StepTwo({
+    required this.hourCtrl,
+    required this.minuteCtrl,
+    required this.amPmCtrl,
+    required this.timeHour,
+    required this.timeMinute,
+    required this.isAm,
+    required this.formattedTime,
+    required this.periodHelper,
+    required this.isTamil,
+    required this.onHourChanged,
+    required this.onMinuteChanged,
+    required this.onAmPmChanged,
+    required this.onPreset,
+    required this.onBack,
+    required this.onNext,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = AppTheme.primaryOf(context);
+    final divider = AppTheme.divider(context);
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(24, 24, 24, 48),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Column(
+              children: [
+                Text(
+                  formattedTime,
+                  style: TextStyle(
+                    fontSize: 44,
+                    fontWeight: FontWeight.w700,
+                    color: primary,
+                    letterSpacing: -1,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  periodHelper,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
+                    color: AppTheme.textSub(context),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // Drum picker card with highlighted selection bar
+          Container(
+            decoration: BoxDecoration(
+              color: AppTheme.surface(context),
+              borderRadius: BorderRadius.circular(AppTheme.radiusLG),
+              border: Border.all(color: divider),
+            ),
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                // Center highlight band
+                Positioned(
+                  left: 12,
+                  right: 12,
+                  top: 84,
+                  height: 48,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: AppTheme.chipBg(context),
+                      borderRadius: BorderRadius.circular(AppTheme.radiusMD),
+                      border: Border.all(
+                        color: primary.withValues(alpha: 0.35),
+                        width: 1,
+                      ),
+                    ),
+                  ),
+                ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _DrumPicker(
+                        controller: hourCtrl,
+                        selectedIndex: timeHour - 1,
+                        items: List.generate(12, (i) => '${i + 1}'),
+                        onChanged: onHourChanged,
+                        label: isTamil ? 'மணி' : 'Hour',
+                      ),
+                    ),
+                    Container(width: 1, height: 180, color: divider),
+                    Expanded(
+                      child: _DrumPicker(
+                        controller: minuteCtrl,
+                        selectedIndex: timeMinute,
+                        items: List.generate(
+                            60, (i) => i.toString().padLeft(2, '0')),
+                        onChanged: onMinuteChanged,
+                        label: isTamil ? 'நிமிடம்' : 'Minute',
+                      ),
+                    ),
+                    Container(width: 1, height: 180, color: divider),
+                    Expanded(
+                      child: _DrumPicker(
+                        controller: amPmCtrl,
+                        selectedIndex: isAm ? 0 : 1,
+                        items: const ['AM', 'PM'],
+                        onChanged: onAmPmChanged,
+                        label: isTamil ? 'வேளை' : 'AM/PM',
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 28),
+          _SectionLabel(isTamil ? 'விரைவு நேரங்கள்' : 'Quick Presets'),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              _PresetBtn(
+                label: isTamil ? 'காலை 8:00' : '8:00 AM',
+                selected: timeHour == 8 && timeMinute == 0 && isAm,
+                onTap: () => onPreset(8, 0, true),
+              ),
+              const SizedBox(width: 8),
+              _PresetBtn(
+                label: isTamil ? 'மதியம் 1:00' : '1:00 PM',
+                selected: timeHour == 1 && timeMinute == 0 && !isAm,
+                onTap: () => onPreset(1, 0, false),
+              ),
+              const SizedBox(width: 8),
+              _PresetBtn(
+                label: isTamil ? 'இரவு 8:00' : '8:00 PM',
+                selected: timeHour == 8 && timeMinute == 0 && !isAm,
+                onTap: () => onPreset(8, 0, false),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 40),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: onBack,
+                  child: Text(isTamil ? '← பின்' : '← Back'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                flex: 2,
+                child: FilledButton(
+                  onPressed: onNext,
+                  child: Text(isTamil ? 'தொடர்க →' : 'Continue →'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Step 3: Days & Voice ─────────────────────────────────────────────────────
+
+class _StepThree extends StatelessWidget {
+  final int daysMask;
+  final String voiceLang;
+  final bool uiIsTa;
+  final List<String> dayNamesTa;
+  final List<String> dayNamesEn;
+  final bool isPlayingPreview;
+  final bool isSaving;
+  final ValueChanged<int> onDayToggle;
+  final VoidCallback onEveryDay;
+  final VoidCallback onClearDays;
+  final ValueChanged<String> onLangChanged;
+  final VoidCallback onPreview;
+  final VoidCallback onBack;
+  final VoidCallback onSave;
+
+  const _StepThree({
+    required this.daysMask,
+    required this.voiceLang,
+    required this.uiIsTa,
+    required this.dayNamesTa,
+    required this.dayNamesEn,
+    required this.isPlayingPreview,
+    required this.isSaving,
+    required this.onDayToggle,
+    required this.onEveryDay,
+    required this.onClearDays,
+    required this.onLangChanged,
+    required this.onPreview,
+    required this.onBack,
+    required this.onSave,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final dayNames = uiIsTa ? dayNamesTa : dayNamesEn;
+    final isEveryDay = daysMask == 127;
+    final primary = AppTheme.primaryOf(context);
+    final divider = AppTheme.divider(context);
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(24, 24, 24, 48),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _SectionLabel(
+                  uiIsTa ? 'திரும்பும் நாட்கள்' : 'Repeat Days'),
+              TextButton(
+                onPressed: isEveryDay ? onClearDays : onEveryDay,
+                child: Text(isEveryDay
+                    ? (uiIsTa ? 'அனைத்தும் நீக்கு' : 'Clear all')
+                    : (uiIsTa ? 'தினமும்' : 'Every day')),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+
+          // Day selector pills
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: List.generate(7, (index) {
+              final bit = 1 << index;
+              final isSelected = (daysMask & bit) != 0;
+              return GestureDetector(
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  onDayToggle(bit);
+                },
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 160),
+                  width: 48,
+                  height: 52,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: isSelected ? primary : AppTheme.card(context),
+                    borderRadius: BorderRadius.circular(AppTheme.radiusMD),
+                    border: Border.all(
+                      color: isSelected ? primary : divider,
+                      width: isSelected ? 1.5 : 1,
+                    ),
+                  ),
+                  child: Text(
+                    dayNames[index],
+                    style: TextStyle(
+                      color: isSelected
+                          ? (AppTheme.isDark(context)
+                              ? AppTheme.darkBg
+                              : Colors.white)
+                          : AppTheme.textSub(context),
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              );
+            }),
+          ),
+
+          const SizedBox(height: 32),
+          _SectionLabel(
+              uiIsTa ? 'குரல் மொழி' : 'Spoken Alert Language'),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: _LangChip(
+                  label: 'தமிழ்',
+                  selected: voiceLang == 'ta',
+                  onTap: () => onLangChanged('ta'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _LangChip(
+                  label: 'English',
+                  selected: voiceLang == 'en',
+                  onTap: () => onLangChanged('en'),
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 24),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: isPlayingPreview ? null : onPreview,
+              icon: isPlayingPreview
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.volume_up_rounded),
+              label: Text(
+                isPlayingPreview
+                    ? (uiIsTa ? 'ஒலிக்கிறது...' : 'Playing voice...')
+                    : (uiIsTa ? 'குரல் மாதிரி கேள்' : 'Preview Voice'),
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 40),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: onBack,
+                  child: Text(uiIsTa ? '← பின்' : '← Back'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                flex: 2,
+                child: FilledButton.icon(
+                  onPressed: isSaving ? null : onSave,
+                  icon: isSaving
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                              color: Colors.white, strokeWidth: 2.5),
+                        )
+                      : const Icon(Icons.check_rounded),
+                  label: Text(uiIsTa ? 'சேமி' : 'Save Reminder'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Shared Widgets ───────────────────────────────────────────────────────────
+
+class _SectionLabel extends StatelessWidget {
+  final String text;
+  const _SectionLabel(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      style: TextStyle(
+        fontSize: 15,
+        fontWeight: FontWeight.w600,
+        color: AppTheme.textSub(context),
+        letterSpacing: 0.1,
+      ),
+    );
+  }
+}
+
+class _TypeGrid extends StatelessWidget {
+  final String selectedType;
+  final bool isTamil;
+  final ValueChanged<String> onChanged;
+
+  const _TypeGrid({
+    required this.selectedType,
+    required this.isTamil,
+    required this.onChanged,
+  });
+
+  static const _types = [
+    (
+      type: 'medicine',
+      iconData: Icons.medication_rounded,
+      labelTa: 'மருந்து',
+      labelEn: 'Medicine'
+    ),
+    (
+      type: 'meeting',
+      iconData: Icons.event_rounded,
+      labelTa: 'சந்திப்பு',
+      labelEn: 'Meeting'
+    ),
+    (
+      type: 'alarm',
+      iconData: Icons.alarm_rounded,
+      labelTa: 'அலாரம்',
+      labelEn: 'Alarm'
+    ),
+    (
+      type: 'custom',
+      iconData: Icons.notifications_active_rounded,
+      labelTa: 'மற்றவை',
+      labelEn: 'Custom'
+    ),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = AppTheme.primaryOf(context);
+    final divider = AppTheme.divider(context);
+
+    Widget buildCard(({String type, IconData iconData, String labelTa, String labelEn}) t) {
+      final isSelected = t.type == selectedType;
+      final label = isTamil ? t.labelTa : t.labelEn;
+      return Expanded(
+        child: GestureDetector(
+          onTap: () {
+            HapticFeedback.selectionClick();
+            onChanged(t.type);
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            constraints: const BoxConstraints(minHeight: AppTheme.touchTarget),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+            decoration: BoxDecoration(
+              color:
+                  isSelected ? AppTheme.chipBg(context) : AppTheme.card(context),
+              borderRadius: BorderRadius.circular(AppTheme.radiusMD),
+              border: Border.all(
+                color: isSelected ? primary : divider,
+                width: isSelected ? 1.5 : 1,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  t.iconData,
+                  color: isSelected ? primary : AppTheme.textSub(context),
+                  size: 22,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: isSelected ? primary : AppTheme.text(context),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              buildCard(_types[0]),
+              const SizedBox(width: 10),
+              buildCard(_types[1]),
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              buildCard(_types[2]),
+              const SizedBox(width: 10),
+              buildCard(_types[3]),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _FoodChips extends StatelessWidget {
+  final String selected;
+  final bool isTamil;
+  final ValueChanged<String> onChanged;
+
+  const _FoodChips({
+    required this.selected,
+    required this.isTamil,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = AppTheme.primaryOf(context);
+    final divider = AppTheme.divider(context);
+
+    final options = [
+      (value: 'none', labelTa: 'குறிப்பில்லை', labelEn: 'No rule'),
+      (value: 'before', labelTa: 'உணவுக்கு முன்', labelEn: 'Before food'),
+      (value: 'after', labelTa: 'உணவுக்குப் பின்', labelEn: 'After food'),
+      (value: 'with', labelTa: 'உணவுடன்', labelEn: 'With food'),
+    ];
+
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      children: options.map((opt) {
+        final isSelected = opt.value == selected;
+        final label = isTamil ? opt.labelTa : opt.labelEn;
+        return GestureDetector(
+          onTap: () {
+            HapticFeedback.selectionClick();
+            onChanged(opt.value);
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color:
+                  isSelected ? AppTheme.chipBg(context) : AppTheme.card(context),
+              borderRadius: BorderRadius.circular(AppTheme.radiusMD),
+              border: Border.all(
+                color: isSelected ? primary : divider,
+                width: isSelected ? 1.5 : 1,
+              ),
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                color: isSelected ? primary : AppTheme.text(context),
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+}
+
+class _DrumPicker extends StatelessWidget {
+  final FixedExtentScrollController controller;
+  final int selectedIndex;
+  final List<String> items;
+  final ValueChanged<int> onChanged;
+  final String label;
+
+  const _DrumPicker({
+    required this.controller,
+    required this.selectedIndex,
+    required this.items,
+    required this.onChanged,
+    required this.label,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = AppTheme.primaryOf(context);
+    final textNormal = AppTheme.textSub(context).withValues(alpha: 0.55);
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 10, bottom: 2),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              color: AppTheme.textSub(context),
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        SizedBox(
+          height: 168,
+          child: ListWheelScrollView.useDelegate(
+            controller: controller,
+            itemExtent: 48,
+            perspective: 0.003,
+            diameterRatio: 1.6,
+            physics: const FixedExtentScrollPhysics(),
+            onSelectedItemChanged: (idx) {
+              HapticFeedback.selectionClick();
+              onChanged(idx);
+            },
+            childDelegate: ListWheelChildBuilderDelegate(
+              childCount: items.length,
+              builder: (context, index) {
+                final isSelected = index == selectedIndex;
+                return Center(
+                  child: Text(
+                    items[index],
+                    style: TextStyle(
+                      fontSize: isSelected ? 24 : 18,
+                      fontWeight:
+                          isSelected ? FontWeight.w700 : FontWeight.w400,
+                      color: isSelected ? primary : textNormal,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PresetBtn extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _PresetBtn({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = AppTheme.primaryOf(context);
     return Expanded(
       child: OutlinedButton(
-        onPressed: () => setState(() => _timeMinutes = minutes),
+        onPressed: () {
+          HapticFeedback.selectionClick();
+          onTap();
+        },
         style: OutlinedButton.styleFrom(
-          padding: const EdgeInsets.symmetric(vertical: 8),
+          backgroundColor:
+              selected ? AppTheme.chipBg(context) : Colors.transparent,
           side: BorderSide(
-            color: isSelected ? Theme.of(context).colorScheme.primary : Colors.grey.withAlpha(80),
-            width: isSelected ? 2 : 1,
+            color: selected ? primary : AppTheme.divider(context),
+            width: selected ? 1.5 : 1,
+          ),
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
+          minimumSize: const Size(0, 48),
+          textStyle:
+              const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+        ),
+        child: Text(
+          label,
+          textAlign: TextAlign.center,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+    );
+  }
+}
+
+class _LangChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _LangChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = AppTheme.primaryOf(context);
+    final divider = AppTheme.divider(context);
+
+    return GestureDetector(
+      onTap: () {
+        HapticFeedback.selectionClick();
+        onTap();
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        constraints: const BoxConstraints(minHeight: AppTheme.touchTarget),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected ? AppTheme.chipBg(context) : AppTheme.card(context),
+          borderRadius: BorderRadius.circular(AppTheme.radiusMD),
+          border: Border.all(
+            color: selected ? primary : divider,
+            width: selected ? 1.5 : 1,
           ),
         ),
         child: Text(
           label,
           style: TextStyle(
-            fontSize: 13,
-            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+            color: selected ? primary : AppTheme.text(context),
           ),
         ),
       ),
